@@ -8,7 +8,6 @@
  */
 import fs from "node:fs";
 import http, { type IncomingMessage } from "node:http";
-import path from "node:path";
 import type { Duplex } from "node:stream";
 
 import Mime from "@effect/platform-node/Mime";
@@ -120,10 +119,6 @@ function testOpenclawGateway(input: import("@okcode/contracts").TestOpenclawGate
   });
 }
 
-const resolveCheckPath = Effect.fn(function* (input: string) {
-  return path.resolve(yield* expandHomePath(input.trim()));
-});
-
 /**
  * Returns true if `a` is a strictly higher semver than `b`.
  * Only handles `major.minor.patch` numeric segments; pre-release suffixes
@@ -140,26 +135,6 @@ function isNewerSemver(a: string, b: string): boolean {
     if (va < vb) return false;
   }
   return false;
-}
-
-function inferAttachmentContentType(filePath: string): string {
-  const mimeType = Mime.getType(filePath);
-  if (mimeType) {
-    return mimeType;
-  }
-
-  const normalizedPath = filePath.toLowerCase();
-  if (normalizedPath.endsWith(".patch") || normalizedPath.endsWith(".diff")) {
-    return "text/x-diff; charset=utf-8";
-  }
-  if (normalizedPath.endsWith(".md")) {
-    return "text/markdown; charset=utf-8";
-  }
-  if (normalizedPath.endsWith(".txt")) {
-    return "text/plain; charset=utf-8";
-  }
-
-  return "application/octet-stream";
 }
 
 /**
@@ -574,13 +549,13 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       } satisfies OrchestrationCommand;
     }
 
-    if (input.command.type !== "thread.turn.start") {
+    if (input.command.type !== "thread.turn.start" && input.command.type !== "thread.turn.steer") {
       return input.command as OrchestrationCommand;
     }
-    const turnStartCommand = input.command;
+    const turnCommand = input.command;
 
     const normalizedAttachments = yield* Effect.forEach(
-      turnStartCommand.message.attachments,
+      turnCommand.message.attachments,
       (attachment) =>
         Effect.gen(function* () {
           const parsed = parseBase64DataUrl(attachment.dataUrl);
@@ -623,7 +598,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
             }
           }
 
-          const attachmentId = createAttachmentId(turnStartCommand.threadId);
+          const attachmentId = createAttachmentId(turnCommand.threadId);
           if (!attachmentId) {
             return yield* new RouteRequestError({
               message: "Failed to create a safe attachment id.",
@@ -680,9 +655,9 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     );
 
     return {
-      ...turnStartCommand,
+      ...turnCommand,
       message: {
-        ...turnStartCommand.message,
+        ...turnCommand.message,
         attachments: normalizedAttachments,
       },
     } satisfies OrchestrationCommand;
@@ -742,7 +717,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
             return;
           }
 
-          const contentType = inferAttachmentContentType(filePath);
+          const contentType = Mime.getType(filePath) ?? "application/octet-stream";
           res.writeHead(200, {
             "Content-Type": contentType,
             "Cache-Control": "public, max-age=31536000, immutable",
@@ -1115,19 +1090,6 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
             new RouteRequestError({
               message: `Failed to list workspace directory: ${String(cause)}`,
             }),
-        });
-      }
-
-      case WS_METHODS.projectsPathExists: {
-        const body = stripRequestTag(request.body);
-        return yield* Effect.gen(function* () {
-          const resolvedPath = yield* resolveCheckPath(body.path);
-          const fileInfo = yield* fileSystem
-            .stat(resolvedPath)
-            .pipe(Effect.catch(() => Effect.succeed(null)));
-          return {
-            exists: fileInfo !== null,
-          };
         });
       }
 
@@ -1640,7 +1602,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       case WS_METHODS.serverGetConfig:
         const keybindingsConfig = yield* keybindingsManager.loadConfigState;
         const providers = yield* getProviderStatuses();
-        const codexConfig = yield* readCodexConfigSummary({ probeLocalBackends: true });
+        const codexConfig = yield* readCodexConfigSummary();
         return {
           cwd,
           keybindingsConfigPath,

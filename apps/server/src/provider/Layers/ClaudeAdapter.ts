@@ -42,8 +42,8 @@ import {
 } from "@okcode/contracts";
 import {
   applyClaudePromptEffortPrefix,
+  getEffectiveClaudeCodeEffort,
   getReasoningEffortOptions,
-  resolveClaudeUltrathinkSdkConfig,
   resolveReasoningEffortForProvider,
   supportsClaudeFastMode,
   supportsClaudeThinkingToggle,
@@ -2811,12 +2811,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           supportsClaudeThinkingToggle(input.model)
             ? input.modelOptions.claudeAgent.thinking
             : undefined;
-        const { effort: sdkEffort, maxThinkingTokens: sdkMaxThinkingTokens } =
-          resolveClaudeUltrathinkSdkConfig(
-            input.model,
-            effort,
-            providerOptions?.maxThinkingTokens ?? null,
-          );
+        const effectiveEffort = getEffectiveClaudeCodeEffort(effort);
         const permissionMode =
           toPermissionMode(providerOptions?.permissionMode) ??
           (input.runtimeMode === "full-access" ? "bypassPermissions" : undefined);
@@ -2838,13 +2833,13 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           ...(input.model ? { model: input.model } : {}),
           pathToClaudeCodeExecutable: providerOptions?.binaryPath ?? "claude",
           settingSources: [...CLAUDE_SETTING_SOURCES],
-          ...(sdkEffort ? { effort: sdkEffort } : {}),
+          ...(effectiveEffort ? { effort: effectiveEffort } : {}),
           ...(permissionMode ? { permissionMode } : {}),
           ...(permissionMode === "bypassPermissions"
             ? { allowDangerouslySkipPermissions: true }
             : {}),
-          ...(sdkMaxThinkingTokens !== undefined
-            ? { maxThinkingTokens: sdkMaxThinkingTokens }
+          ...(providerOptions?.maxThinkingTokens !== undefined
+            ? { maxThinkingTokens: providerOptions.maxThinkingTokens }
             : {}),
           ...(Object.keys(settings).length > 0 ? { settings } : {}),
           ...(existingResumeSessionId ? { resume: existingResumeSessionId } : {}),
@@ -2935,10 +2930,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             config: {
               ...(input.model ? { model: input.model } : {}),
               ...(input.cwd ? { cwd: input.cwd } : {}),
-              ...(sdkEffort ? { effort: sdkEffort } : {}),
+              ...(effectiveEffort ? { effort: effectiveEffort } : {}),
               ...(permissionMode ? { permissionMode } : {}),
-              ...(sdkMaxThinkingTokens !== undefined
-                ? { maxThinkingTokens: sdkMaxThinkingTokens }
+              ...(providerOptions?.maxThinkingTokens !== undefined
+                ? { maxThinkingTokens: providerOptions.maxThinkingTokens }
                 : {}),
               ...(fastMode ? { fastMode: true } : {}),
             },
@@ -3069,6 +3064,15 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         });
       });
 
+    const steerTurn: ClaudeAdapterShape["steerTurn"] = () =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "turn/steer",
+          detail: "Turn steering is not supported by Claude Agent.",
+        }),
+      );
+
     const readThread: ClaudeAdapterShape["readThread"] = (threadId) =>
       Effect.gen(function* () {
         const context = yield* requireSession(threadId);
@@ -3169,6 +3173,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       },
       startSession,
       sendTurn,
+      steerTurn,
       interruptTurn,
       readThread,
       rollbackThread,
